@@ -10,10 +10,10 @@
             "package": "ledger_token_2",
             "type": "rust"
         },        
-        "kv_frontend": {
-            "candid": "kv_frontend.did",
-            "package": "kv_frontend",
-            "wasm": "kv_frontend.wasm",
+        "dex": {
+            "candid": "dex.did",
+            "package": "dex",
+            "wasm": "dex.wasm",
             "build": "./build.sh",
             "type": "custom"
         }

@@ -20,5 +20,5 @@ ic-cdk-optimizer ${BASE}/ledger_token_2.wasm --output ${BASE}/ledger_token_2.was
 )
 
 echo "building kv frontend canister"
-cargo build --target wasm32-unknown-unknown --release -p kv_frontend --locked
-ic-cdk-optimizer ${BASE}/kv_frontend.wasm --output ./kv_frontend.wasm
+cargo build --target wasm32-unknown-unknown --release -p dex --locked
+ic-cdk-optimizer ${BASE}/dex.wasm --output ./dex.wasm
