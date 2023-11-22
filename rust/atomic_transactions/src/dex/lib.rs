@@ -12,7 +12,7 @@ use std::sync::RwLock;
 const NUM_PARTITIONS: usize = 5;
 
 // Inline wasm binary of data partition canister
-pub const WASM: &[u8] = (
+pub const WASM: (&[u8], &[u8]) = (
     include_bytes!("../../target/wasm32-unknown-unknown/release/ledger_token_1.wasm.gz"),
     include_bytes!("../../target/wasm32-unknown-unknown/release/ledger_token_2.wasm.gz"),
 );
@@ -46,7 +46,7 @@ async fn create_ledgers_from_wasm() {
     };
 
     // Create ledger 1
-    let canister_record = create_canister(create_args).await.unwrap();
+    let canister_record = create_canister(create_args.clone()).await.unwrap();
     let canister_id = canister_record.0.canister_id;
 
     ic_cdk::println!("Created canister {}", canister_id);
@@ -66,7 +66,7 @@ async fn create_ledgers_from_wasm() {
     });
 
     // Create ledger 2
-    let canister_record = create_canister(create_args).await.unwrap();
+    let canister_record = create_canister(create_args.clone()).await.unwrap();
     let canister_id = canister_record.0.canister_id;
 
     ic_cdk::println!("Created canister {}", canister_id);
