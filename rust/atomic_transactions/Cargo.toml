@@ -1,5 +1,6 @@
 [workspace]
 members = [
-    "src/data_partition",
-    "src/kv_frontend"
+    "src/ledger_token_1",
+    "src/ledger_token_2",
+    "src/dex"
 ]
