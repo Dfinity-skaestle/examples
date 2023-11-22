@@ -1,0 +1,34 @@
+{
+    "canisters": {
+        "ledger_token_1": {
+            "candid": "ledger_token_1.did",
+            "package": "ledger_token_1",
+            "type": "rust"
+        },
+        "ledger_token_2": {
+            "candid": "ledger_token_2.did",
+            "package": "ledger_token_2",
+            "type": "rust"
+        },        
+        "kv_frontend": {
+            "candid": "kv_frontend.did",
+            "package": "kv_frontend",
+            "wasm": "kv_frontend.wasm",
+            "build": "./build.sh",
+            "type": "custom"
+        }
+    },
+    "defaults": {
+        "build": {
+            "args": "",
+            "packtool": ""
+        }
+    },
+    "networks": {
+        "local": {
+            "bind": "127.0.0.1:8000",
+            "type": "ephemeral"
+        }
+    },
+    "version": 1
+}
