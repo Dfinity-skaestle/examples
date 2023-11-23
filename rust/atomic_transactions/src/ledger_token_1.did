@@ -1,4 +1,6 @@
 service : {
-    "put" : (nat, nat) -> (opt nat);
-    "get" : (nat) -> (opt nat) query;
+    "init" : (vec nat, vec nat) -> ();
+    "prepare_transaction" : (nat, nat, nat) -> (bool);
+    "abort_transaction" : (nat, nat) -> ();
+    "commit_transaction" : (nat, nat, nat) -> ();
 };

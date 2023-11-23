@@ -53,10 +53,10 @@ thread_local! {
 
 #[update]
 /// Prepare initial balances of this ledger
-fn init(initial_token_balances: Vec<(TokenName, TokenBalance)>) {
+fn init(token_names: Vec<TokenName>, token_balances: Vec<TokenBalance>) {
     BALANCES.with_borrow_mut(|balances| {
-        for (name, balance) in initial_token_balances {
-            balances.insert(name, balance);
+        for (name, balance) in token_names.iter().zip(token_balances) {
+            balances.insert(*name, balance);
         }
     });
 }
