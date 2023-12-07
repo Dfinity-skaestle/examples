@@ -67,10 +67,18 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
 
             // Trigger all calls that have not been triggered yet
             for call in pending_prepare_calls {
+                // Nothing to do if we already have a successful call
+                if call.num_success > 0 {
+                    continue;
+                }
+
+                with_state_mut(tid, |_, s| s.register_prepare_call(call.target.clone()));
                 let call_raw_result =
                     call_raw(call.target, &call.method, call.payload.clone(), 0).await;
 
-                with_state_mut(tid, |_, s| s.prepare_received(call_raw_result.is_ok()));
+                with_state_mut(tid, |_, s| {
+                    s.prepare_received(call_raw_result.is_ok(), call.target)
+                });
             }
         }
         TransactionStatus::Aborting => {
@@ -78,10 +86,18 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
 
             // Trigger all calls that have not been triggered yet
             for call in pending_abort_calls {
+                // Nothing to do if we already have a successful call
+                if call.num_success > 0 {
+                    continue;
+                }
+
+                with_state_mut(tid, |_, s| s.register_abort_call(call.target.clone()));
                 let call_raw_result =
                     call_raw(call.target, &call.method, call.payload.clone(), 0).await;
 
-                with_state_mut(tid, |_, s| s.abort_received(call_raw_result.is_ok()));
+                with_state_mut(tid, |_, s| {
+                    s.abort_received(call_raw_result.is_ok(), call.target)
+                });
             }
         }
         TransactionStatus::Committing => {
@@ -89,10 +105,18 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
 
             // Trigger all calls that have not been triggered yet
             for call in pending_commit_calls {
+                // Nothing to do if we already have a successful call
+                if call.num_success > 0 {
+                    continue;
+                }
+
+                with_state_mut(tid, |_, s| s.register_commit_call(call.target.clone()));
                 let call_raw_result =
                     call_raw(call.target, &call.method, call.payload.clone(), 0).await;
 
-                with_state_mut(tid, |_, s| s.commit_received(call_raw_result.is_ok()));
+                with_state_mut(tid, |_, s| {
+                    s.commit_received(call_raw_result.is_ok(), call.target)
+                });
             }
         }
         // We are already in a final state, no need to do anything
