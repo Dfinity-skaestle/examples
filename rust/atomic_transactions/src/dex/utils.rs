@@ -38,8 +38,18 @@ pub(crate) async fn create_ledgers_from_wasm() -> Vec<Principal> {
 
         install_code(install_args).await.unwrap();
 
-        let token_names: Vec<u32> = vec![(i + 1) as u32];
-        let token_balances: Vec<u64> = vec![10000];
+        // XXX - Make TokenName a shared type def between both canisters.
+        let token_names: Vec<String> = if i == 0 {
+            vec!["ICP".to_string()]
+        } else {
+            vec!["USD".to_string(), "EUR".to_string()]
+        };
+        let token_balances: Vec<u64> = if i == 0 {
+            vec![10000]
+        } else {
+            vec![10000, 10000]
+        };
+
         let _: () = ic_cdk::call(canister_id, "init", (token_names, token_balances))
             .await
             .unwrap();

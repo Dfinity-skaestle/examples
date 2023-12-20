@@ -1,5 +1,5 @@
 use atomic_transactions::{TransactionId, TransactionResult, TransactionState};
-use candid::{Encode, Principal};
+use candid::{Decode, Encode, Principal};
 use ic_cdk::api::call::call_raw;
 
 use ic_cdk::api::management_canister::provisional::CanisterId;
@@ -11,8 +11,8 @@ mod atomic_transactions;
 mod utils;
 use crate::atomic_transactions::{TransactionList, TransactionStatus};
 
-const TOKEN1: u32 = 1;
-const TOKEN2: u32 = 2;
+const TOKEN1: &str = "ICP";
+const TOKEN2: &str = "USD";
 
 thread_local! {
     // A list of canister IDs for data partitions
@@ -25,6 +25,17 @@ thread_local! {
 ///
 /// Executes a hypothetical token swap between two tokens, where 1337 units of token 1 are swapped for 42 tokens of token 2.
 async fn swap_token1_to_token2() -> TransactionResult {
+    swap_tokens(TOKEN1.to_string(), TOKEN2.to_string(), -1337, 42).await
+}
+
+#[update]
+/// Initialize transaction that executes an arbitrary token swap.
+async fn swap_tokens(
+    token1: String,
+    token2: String,
+    amount1: i64,
+    amount2: i64,
+) -> TransactionResult {
     let tid = TRANSACTION_STATE.with(|state| {
         let mut state = state.borrow_mut();
         let tid = state.get_next_transaction_number();
@@ -41,8 +52,8 @@ async fn swap_token1_to_token2() -> TransactionResult {
                 "abort_transaction",
                 "commit_transaction",
                 &[
-                    &Encode!(&tid, &TOKEN1, &(-1337 as i64)).unwrap(),
-                    &Encode!(&tid, &TOKEN2, &(42 as i64)).unwrap(),
+                    &Encode!(&tid, &token1, &amount1).unwrap(),
+                    &Encode!(&tid, &token2, &amount2).unwrap(),
                 ],
             ),
         );
@@ -92,7 +103,15 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
 
                 with_state_mut(tid, |_, s| {
                     ic_cdk::println!("Call result: {:?}", call_raw_result);
-                    s.prepare_received(call_raw_result.is_ok(), call.target)
+                    let succ = match call_raw_result {
+                        Ok(payload) => {
+                            let successful_prepare: bool = Decode!(&payload, bool).unwrap();
+                            ic_cdk::println!("Received prepare response: {}", successful_prepare);
+                            successful_prepare
+                        }
+                        Err(_) => false,
+                    };
+                    s.prepare_received(succ, call.target)
                 });
             }
         }

@@ -101,7 +101,12 @@ impl TransactionState {
     }
 
     pub(crate) fn prepare_received(&mut self, success: bool, canister_id: CanisterId) {
-        assert_eq!(self.transaction_status, TransactionStatus::Preparing);
+        // We are either in Preparing state or the transaction has already been aborted and
+        // we still receive from stranglers.
+        assert!(
+            self.transaction_status == TransactionStatus::Preparing
+                || self.transaction_status == TransactionStatus::Aborting
+        );
 
         let call = self
             .pending_prepare_calls
@@ -127,8 +132,20 @@ impl TransactionState {
             .filter(|call| call.num_success > 0)
             .count();
 
+        // All peers approved the prepare statement
         if num_succ_calls as u64 == self.total_number_of_children {
             self.transaction_status = TransactionStatus::Committing;
+        }
+
+        let num_fail_calls = self
+            .pending_prepare_calls
+            .iter()
+            .filter(|call| call.num_fail > 0)
+            .count();
+
+        // At least one peer rejected the prepare statement
+        if num_fail_calls as u64 > 0 {
+            self.transaction_status = TransactionStatus::Aborting;
         }
     }
 
