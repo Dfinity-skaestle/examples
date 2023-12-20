@@ -1,6 +1,3 @@
 [workspace]
-members = [
-    "src/ledger_token_1",
-    "src/ledger_token_2",
-    "src/dex"
-]
+resolver = "2"
+members = ["src/ledger_token_1", "src/dex"]

@@ -1,3 +1,4 @@
+use candid::Principal;
 use ic_cdk::api::management_canister::{
     main::{
         create_canister, install_code, CanisterInstallMode, CreateCanisterArgument,
@@ -6,12 +7,12 @@ use ic_cdk::api::management_canister::{
     provisional::CanisterSettings,
 };
 
-const NUM_LEDGERS: usize = 5;
+const NUM_LEDGERS: usize = 2;
 // Inline wasm binary of data partition canister
 pub const WASM: &[u8] =
     include_bytes!("../../target/wasm32-unknown-unknown/release/ledger_token_1.wasm.gz");
 
-pub(crate) async fn create_ledgers_from_wasm() {
+pub(crate) async fn create_ledgers_from_wasm() -> Vec<Principal> {
     let create_args = CreateCanisterArgument {
         settings: Some(CanisterSettings {
             controllers: Some(vec![ic_cdk::id()]),
@@ -21,6 +22,7 @@ pub(crate) async fn create_ledgers_from_wasm() {
         }),
     };
 
+    let mut canister_ids = vec![];
     for i in 0..NUM_LEDGERS {
         let canister_record = create_canister(create_args.clone()).await.unwrap();
         let canister_id = canister_record.0.canister_id;
@@ -42,9 +44,8 @@ pub(crate) async fn create_ledgers_from_wasm() {
             .await
             .unwrap();
 
-        CANISTER_IDS.with(|canister_ids| {
-            let mut canister_ids = canister_ids.borrow_mut();
-            canister_ids.push(canister_id);
-        });
+        canister_ids.push(canister_id);
     }
+
+    canister_ids
 }

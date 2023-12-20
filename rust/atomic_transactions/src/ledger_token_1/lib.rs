@@ -1,11 +1,10 @@
 use candid::Principal;
-use ic_cdk_macros::{query, update};
-use ic_stable_structures::{BTreeMap, BoundedStorable, DefaultMemoryImpl, Storable};
-use std::cell::RefCell;
+use ic_cdk_macros::update;
+use std::{cell::RefCell, collections::BTreeMap};
 
 type TokenName = u32;
 type TokenBalance = u64;
-type TransactionId = u32;
+type TransactionId = usize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TransactionState {
@@ -20,42 +19,14 @@ enum TransactionStatus {
     Comitted,
 }
 
-impl Storable for TransactionStatus {
-    fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
-        let r: u8 = match self {
-            TransactionStatus::Prepared => 1,
-            TransactionStatus::Aborted => 2,
-            TransactionStatus::Comitted => 3,
-        };
-        std::borrow::Cow::Owned(vec![r])
-    }
-
-    fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
-        let ptr = bytes.as_ptr();
-        let v = unsafe { *ptr };
-
-        match v {
-            1 => TransactionStatus::Prepared,
-            2 => TransactionStatus::Aborted,
-            3 => TransactionStatus::Comitted,
-            _ => panic!("Unsupported transaction state"),
-        }
-    }
-}
-
-impl BoundedStorable for TransactionStatus {
-    const MAX_SIZE: u32 = 1;
-    const IS_FIXED_SIZE: bool = true;
-}
-
 thread_local! {
     // Balances of tokens stored in this ledger
-    static BALANCES: RefCell<BTreeMap<TokenName, TokenBalance, DefaultMemoryImpl>> = RefCell::new(
-        BTreeMap::init(DefaultMemoryImpl::default()));
+    static BALANCES: RefCell<BTreeMap<TokenName, TokenBalance>> = RefCell::new(
+        BTreeMap::new());
 
     // Balances of tokens stored in this ledger
-    static PC_STATE: RefCell<BTreeMap<TokenName, TransactionStatus, DefaultMemoryImpl>> = RefCell::new(
-        BTreeMap::init(DefaultMemoryImpl::default()));
+    static PC_STATE: RefCell<BTreeMap<TokenName, TransactionStatus>> = RefCell::new(
+        BTreeMap::new());
 }
 
 #[update]
@@ -64,7 +35,7 @@ fn init(token_names: Vec<TokenName>, token_balances: Vec<TokenBalance>) {
     BALANCES.with_borrow_mut(|balances| {
         for (name, balance) in token_names.iter().zip(token_balances) {
             balances.insert(*name, balance);
-            ic_cdk::println!("Inital token {} with balance {}", name, balance);
+            ic_cdk::println!("Ledger: Inital token {} with balance {}", name, balance);
         }
     });
 }
@@ -134,7 +105,7 @@ fn abort_transaction(tid: TransactionId, resource: TokenName) {
 fn commit_transaction(tid: TransactionId, resource: TokenName, balance_change: i64) {
     ic_cdk::println!("Committing transaction: {}", tid);
     PC_STATE.with_borrow_mut(|pc_state| {
-        assert_eq!(pc_state.get(&resource), Some(TransactionStatus::Prepared));
+        assert_eq!(pc_state.get(&resource), Some(&TransactionStatus::Prepared));
         BALANCES.with_borrow_mut(|balances| {
             balances.insert(
                 resource.clone(),

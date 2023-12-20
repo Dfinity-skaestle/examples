@@ -1,3 +1,18 @@
+type TransactionStatus = variant {
+    Preparing;
+    Aborting;
+    Committing;
+    Committed;
+    Aborted;
+};
+
+type TransactionResult = record {
+    "transaction_number": nat64;
+    "state": TransactionStatus;
+};
+
 service : {
     "init" : () -> ();
+    "transaction_loop" : (nat64) -> (TransactionResult, );
+    "swap_token1_to_token2" : () -> (TransactionResult, );
 };

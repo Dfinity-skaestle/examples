@@ -25,7 +25,7 @@ thread_local! {
 ///
 /// Executes a hypothetical token swap between two tokens, where 1337 units of token 1 are swapped for 42 tokens of token 2.
 async fn swap_token1_to_token2() -> TransactionResult {
-    TRANSACTION_STATE.with(|state| {
+    let tid = TRANSACTION_STATE.with(|state| {
         let mut state = state.borrow_mut();
         let tid = state.get_next_transaction_number();
 
@@ -41,14 +41,16 @@ async fn swap_token1_to_token2() -> TransactionResult {
                 "abort_transaction",
                 "commit_transaction",
                 &[
-                    &Encode!(&(tid, TOKEN1, -1337,)).unwrap(),
-                    &Encode!(&(tid, TOKEN2, 42,)).unwrap(),
+                    &Encode!(&tid, &TOKEN1, &(-1337 as i64)).unwrap(),
+                    &Encode!(&tid, &TOKEN2, &(42 as i64)).unwrap(),
                 ],
             ),
         );
+        tid
+    });
 
-        with_state(tid, atomic_transactions::get_transaction_state)
-    })
+    ic_cdk::println!("Transaction {} initialized", tid);
+    with_state(tid, atomic_transactions::get_transaction_state)
 }
 
 #[update]
@@ -60,6 +62,11 @@ async fn swap_token1_to_token2() -> TransactionResult {
 /// Returns the state of the transaction.
 async fn transaction_loop(tid: TransactionId) -> TransactionResult {
     let transaction_status = with_state(tid, atomic_transactions::get_transaction_status);
+    ic_cdk::println!(
+        "Executing transaction {} with status {:?}",
+        tid,
+        transaction_status
+    );
 
     match transaction_status {
         TransactionStatus::Preparing => {
@@ -72,11 +79,19 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
                     continue;
                 }
 
+                ic_cdk::println!(
+                    "Calling {} with method {} and payload {:?}",
+                    call.target,
+                    call.method,
+                    call.payload
+                );
+
                 with_state_mut(tid, |_, s| s.register_prepare_call(call.target.clone()));
                 let call_raw_result =
                     call_raw(call.target, &call.method, call.payload.clone(), 0).await;
 
                 with_state_mut(tid, |_, s| {
+                    ic_cdk::println!("Call result: {:?}", call_raw_result);
                     s.prepare_received(call_raw_result.is_ok(), call.target)
                 });
             }
@@ -90,6 +105,13 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
                 if call.num_success > 0 {
                     continue;
                 }
+
+                ic_cdk::println!(
+                    "Calling {} with method {} and payload {:?}",
+                    call.target,
+                    call.method,
+                    call.payload
+                );
 
                 with_state_mut(tid, |_, s| s.register_abort_call(call.target.clone()));
                 let call_raw_result =
@@ -110,6 +132,13 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
                     continue;
                 }
 
+                ic_cdk::println!(
+                    "Calling {} with method {} and payload {:?}",
+                    call.target,
+                    call.method,
+                    call.payload
+                );
+
                 with_state_mut(tid, |_, s| s.register_commit_call(call.target.clone()));
                 let call_raw_result =
                     call_raw(call.target, &call.method, call.payload.clone(), 0).await;
@@ -124,6 +153,10 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
         TransactionStatus::Aborted => {}
     }
 
+    with_state(tid, |_, state| {
+        ic_cdk::println!("Transaction {} state is: {:?}", tid, state);
+    });
+
     with_state(tid, atomic_transactions::get_transaction_state)
 }
 
@@ -136,11 +169,16 @@ fn get_transaction_state(tid: TransactionId) -> TransactionResult {
 #[update]
 /// Initialize the "ledgers" used in this demo.
 async fn init() {
+    ic_cdk::println!("---------------------");
     if CANISTER_IDS.with(|canister_ids| {
         let canister_ids = canister_ids.borrow();
         canister_ids.len() == 0
     }) {
-        utils::create_ledgers_from_wasm().await;
+        let principals = utils::create_ledgers_from_wasm().await;
+        CANISTER_IDS.with(|canister_ids| {
+            let mut canister_ids = canister_ids.borrow_mut();
+            canister_ids.extend(principals);
+        });
     }
 }
 
@@ -151,7 +189,7 @@ fn get_canister_ids() -> Vec<CanisterId> {
 // https://github.com/dfinity/ic-docutrack/blob/main/backend/src/lib.rs#L222
 
 /// A helper method to mutate the state.
-pub fn with_state_mut<R>(
+pub(crate) fn with_state_mut<R>(
     tid: TransactionId,
     f: impl FnOnce(TransactionId, &mut TransactionState) -> R,
 ) -> R {
@@ -159,7 +197,7 @@ pub fn with_state_mut<R>(
 }
 
 /// A helper method to access the state.
-pub fn with_state<R>(
+pub(crate) fn with_state<R>(
     tid: TransactionId,
     f: impl FnOnce(TransactionId, &TransactionState) -> R,
 ) -> R {

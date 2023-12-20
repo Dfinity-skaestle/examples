@@ -38,6 +38,7 @@ impl TransactionList {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct TransactionState {
     pub(crate) total_number_of_children: u64, // Total number of canisters participating in 2PC
     pub(crate) transaction_status: TransactionStatus,
@@ -104,9 +105,15 @@ impl TransactionState {
 
         let call = self
             .pending_prepare_calls
-            .iter()
+            .iter_mut()
             .find(|call| call.target == canister_id)
             .unwrap();
+
+        ic_cdk::println!(
+            "Received prepare response from {} with success {}",
+            canister_id,
+            success
+        );
 
         if success {
             call.num_success += 1;
@@ -130,9 +137,15 @@ impl TransactionState {
 
         let call = self
             .pending_abort_calls
-            .iter()
+            .iter_mut()
             .find(|call| call.target == canister_id)
             .unwrap();
+
+        ic_cdk::println!(
+            "Received abort response from {} with success {}",
+            canister_id,
+            success
+        );
 
         if success {
             call.num_success += 1;
@@ -156,9 +169,15 @@ impl TransactionState {
 
         let call = self
             .pending_commit_calls
-            .iter()
+            .iter_mut()
             .find(|call| call.target == canister_id)
             .unwrap();
+
+        ic_cdk::println!(
+            "Received commit response from {} with success {}",
+            canister_id,
+            success
+        );
 
         if success {
             call.num_success += 1;
@@ -181,7 +200,7 @@ impl TransactionState {
     pub(crate) fn register_prepare_call(&mut self, canister_id: CanisterId) {
         let call = self
             .pending_prepare_calls
-            .iter()
+            .iter_mut()
             .find(|call| call.target == canister_id)
             .unwrap();
 
@@ -191,7 +210,7 @@ impl TransactionState {
     pub(crate) fn register_abort_call(&mut self, canister_id: CanisterId) {
         let call = self
             .pending_abort_calls
-            .iter()
+            .iter_mut()
             .find(|call| call.target == canister_id)
             .unwrap();
 
@@ -201,7 +220,7 @@ impl TransactionState {
     pub(crate) fn register_commit_call(&mut self, canister_id: CanisterId) {
         let call = self
             .pending_commit_calls
-            .iter()
+            .iter_mut()
             .find(|call| call.target == canister_id)
             .unwrap();
 
@@ -215,7 +234,7 @@ pub(crate) struct TransactionResult {
     pub(crate) state: TransactionStatus,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct Call {
     pub(crate) target: CanisterId,
     pub(crate) method: String,

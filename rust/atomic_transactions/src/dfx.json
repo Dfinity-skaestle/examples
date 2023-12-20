@@ -9,11 +9,11 @@
             "candid": "ledger_token_2.did",
             "package": "ledger_token_2",
             "type": "rust"
-        },        
+        },
         "dex": {
             "candid": "dex.did",
             "package": "dex",
-            "wasm": "dex.wasm",
+            "wasm": "dex.wasm.gz",
             "build": "./build.sh",
             "type": "custom"
         }
