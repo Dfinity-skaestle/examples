@@ -5,11 +5,6 @@
             "package": "ledger_token_1",
             "type": "rust"
         },
-        "ledger_token_2": {
-            "candid": "ledger_token_2.did",
-            "package": "ledger_token_2",
-            "type": "rust"
-        },
         "dex": {
             "candid": "dex.did",
             "package": "dex",
