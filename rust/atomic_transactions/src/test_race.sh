@@ -8,7 +8,7 @@ function error() {
 }
 
 dfx canister call dex init '()'
-dfx canister call dex disable_timer '()'
+dfx canister call dex disable_timer '(true)'
 
 # Make sure there are not outstanding timer invocations
 sleep 2

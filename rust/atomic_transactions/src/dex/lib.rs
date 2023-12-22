@@ -93,10 +93,10 @@ fn get_active_transactions() -> Vec<TransactionId> {
 #[update]
 /// Disable the timer loop.
 /// This is useful for testing.
-fn disable_timer() {
+fn disable_timer(disable: bool) {
     CONFIGURATION.with(|configuration| {
         let mut configuration = configuration.borrow_mut();
-        configuration.disable_timer = true;
+        configuration.disable_timer = disable;
     });
 }
 
