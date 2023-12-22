@@ -49,8 +49,7 @@ fn init(token_names: Vec<TokenName>, token_balances: Vec<TokenBalance>) {
 /// It also ensures that the given resource has not already been prepared by another transaction.
 /// If this is okay, response "yes", otherwise "no".
 ///
-/// XXX - This is currently not idempotent. For that, we would need to record the principal for which
-/// a previous prepare has been issued.
+/// Function is idempotent. If prepared is called multiple times for the same transaction, "true" will be returned.
 fn prepare_transaction(tid: TransactionId, resource: TokenName, balance_change: i64) -> bool {
     ic_cdk::println!("Preparing transaction: {} for resource {:?}", tid, resource);
 
@@ -59,13 +58,18 @@ fn prepare_transaction(tid: TransactionId, resource: TokenName, balance_change: 
             let current_state = pc_state.get(&resource);
             ic_cdk::println!("Current state of token {:?}: {:?}", resource, current_state);
             match current_state {
-                Some(TransactionStatus::Prepared(tid)) => {
+                Some(TransactionStatus::Prepared(prepared_tid)) => {
                     // Resource already in prepare state, reject further prepare statements.
-                    ic_cdk::println!(
-                        "Token already prepared for {} - rejecting prepare statement",
-                        tid
-                    );
-                    false
+
+                    if &tid == prepared_tid {
+                        // This is a retry of the same transaction, so we can accept it
+                        ic_cdk::println!("Token already prepared for this transaction {} - accepting prepare statement", tid);
+                        true
+                    } else {
+                        // This is a different transaction, so we reject it
+                        ic_cdk::println!("Token already prepared for another transaction {} - rejecting prepare statement for {}", prepared_tid, tid);
+                        false
+                    }
                 }
                 Some(TransactionStatus::Aborted) | Some(TransactionStatus::Comitted) | None => {
                     match balances.get(&resource) {
