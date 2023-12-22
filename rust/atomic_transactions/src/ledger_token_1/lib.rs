@@ -57,6 +57,8 @@ fn init(token_names: Vec<TokenName>, token_balances: Vec<TokenBalance>) {
     });
 }
 
+/// XXX Make this code generic, so that the "action" (in this case the saturating add)
+/// is given to the transaction processing system, and nothing else.
 fn _prepare_transaction(
     pc_state: &mut BTreeMap<TokenName, TransactionStatus>,
     balances: &mut BTreeMap<TokenName, TokenBalance>,

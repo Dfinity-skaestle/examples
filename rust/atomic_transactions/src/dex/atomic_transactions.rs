@@ -45,6 +45,8 @@ pub(crate) struct TransactionState {
     pub(crate) pending_prepare_calls: Vec<Call>,
     pub(crate) pending_abort_calls: Vec<Call>,
     pub(crate) pending_commit_calls: Vec<Call>,
+    // The time this transaction was last retried.
+    pub(crate) last_action_time: u64,
 }
 
 impl TransactionState {
@@ -97,6 +99,7 @@ impl TransactionState {
             pending_prepare_calls: prepare_calls,
             pending_abort_calls: abort_calls,
             pending_commit_calls: commit_calls,
+            last_action_time: 0,
         }
     }
 

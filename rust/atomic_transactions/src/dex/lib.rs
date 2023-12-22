@@ -73,14 +73,20 @@ async fn swap_tokens(
 ///
 /// Returns the state of the transaction.
 async fn transaction_loop(tid: TransactionId) -> TransactionResult {
-    let transaction_status = with_state(tid, atomic_transactions::get_transaction_status);
+    let initial_transaction_status = with_state(tid, atomic_transactions::get_transaction_status);
     ic_cdk::println!(
         "Executing transaction {} with status {:?}",
         tid,
-        transaction_status
+        initial_transaction_status
     );
 
-    match transaction_status {
+    const TIMEOUT: u64 = 5 * 1000 * 1000 * 1000;
+    if ic_cdk::api::time() <= with_state(tid, |_, s| s.last_action_time) + TIMEOUT {
+        ic_cdk::println!("Rate limiting transaction {}", tid);
+        return with_state(tid, atomic_transactions::get_transaction_state);
+    }
+
+    match initial_transaction_status {
         TransactionStatus::Preparing => {
             let pending_prepare_calls = with_state(tid, |_, f| f.pending_prepare_calls.clone());
 
@@ -97,6 +103,8 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
                     call.method,
                     call.payload
                 );
+
+                with_state_mut(tid, |_, s| s.last_action_time = ic_cdk::api::time());
 
                 with_state_mut(tid, |_, s| s.register_prepare_call(call.target.clone()));
                 let call_raw_result =
@@ -141,6 +149,8 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
                     call.payload
                 );
 
+                with_state_mut(tid, |_, s| s.last_action_time = ic_cdk::api::time());
+
                 with_state_mut(tid, |_, s| s.register_abort_call(call.target.clone()));
                 let call_raw_result =
                     call_raw(call.target, &call.method, call.payload.clone(), 0).await;
@@ -167,6 +177,8 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
                     call.payload
                 );
 
+                with_state_mut(tid, |_, s| s.last_action_time = ic_cdk::api::time());
+
                 with_state_mut(tid, |_, s| s.register_commit_call(call.target.clone()));
                 let call_raw_result =
                     call_raw(call.target, &call.method, call.payload.clone(), 0).await;
@@ -181,9 +193,20 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
         TransactionStatus::Aborted => {}
     }
 
-    with_state(tid, |_, state| {
+    let new_transaction_status = with_state(tid, |_, state| {
         ic_cdk::println!("Transaction {} state is: {:?}", tid, state);
+        state.transaction_status
     });
+
+    if new_transaction_status != initial_transaction_status {
+        let o = format!(
+            "Transaction {} state changed from {:?} to {:?}",
+            tid, initial_transaction_status, new_transaction_status
+        );
+        ic_cdk::println!("{}", Style::new().fg(ansi_term::Color::Yellow).paint(o));
+        // Reset last action time, so that the next action on this transaction can be executed immediately.
+        with_state_mut(tid, |_, s| s.last_action_time = 0);
+    }
 
     with_state(tid, atomic_transactions::get_transaction_state)
 }
