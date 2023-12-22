@@ -1,3 +1,4 @@
+use ansi_term::Style;
 use atomic_transactions::{TransactionId, TransactionResult, TransactionState};
 use candid::{Decode, Encode, Principal};
 use ic_cdk::api::call::call_raw;
@@ -102,7 +103,15 @@ async fn transaction_loop(tid: TransactionId) -> TransactionResult {
                     call_raw(call.target, &call.method, call.payload.clone(), 0).await;
 
                 with_state_mut(tid, |_, s| {
-                    ic_cdk::println!("Call result: {:?}", call_raw_result);
+                    let style = if call_raw_result.is_ok() {
+                        Style::new().bold().fg(ansi_term::Color::Green)
+                    } else {
+                        Style::new().bold().fg(ansi_term::Color::Red)
+                    };
+                    ic_cdk::println!(
+                        "{}",
+                        style.paint(format!("Call result: {:?}", call_raw_result))
+                    );
                     let succ = match call_raw_result {
                         Ok(payload) => {
                             let successful_prepare: bool = Decode!(&payload, bool).unwrap();

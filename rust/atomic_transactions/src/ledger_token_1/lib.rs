@@ -31,15 +31,85 @@ thread_local! {
         BTreeMap::new());
 }
 
+pub(crate) fn with_state_mut<R>(
+    f: impl FnOnce(
+        &mut BTreeMap<TokenName, TransactionStatus>,
+        &mut BTreeMap<TokenName, TokenBalance>,
+    ) -> R,
+) -> R {
+    PC_STATE.with_borrow_mut(|pc_state| BALANCES.with_borrow_mut(|balances| f(pc_state, balances)))
+}
+
+pub(crate) fn with_state<R>(
+    f: impl FnOnce(&BTreeMap<TokenName, TransactionStatus>, &BTreeMap<TokenName, TokenBalance>) -> R,
+) -> R {
+    PC_STATE.with_borrow(|pc_state| BALANCES.with_borrow(|balances| f(pc_state, balances)))
+}
+
 #[update]
 /// Prepare initial balances of this ledger
 fn init(token_names: Vec<TokenName>, token_balances: Vec<TokenBalance>) {
-    BALANCES.with_borrow_mut(|balances| {
+    with_state_mut(|_pc_state, balances| {
         for (name, balance) in token_names.iter().zip(token_balances) {
             balances.insert(name.clone(), balance);
             ic_cdk::println!("Ledger: Inital token {:?} with balance {}", name, balance);
         }
     });
+}
+
+fn _prepare_transaction(
+    pc_state: &mut BTreeMap<TokenName, TransactionStatus>,
+    balances: &mut BTreeMap<TokenName, TokenBalance>,
+    tid: TransactionId,
+    resource: TokenName,
+    balance_change: i64,
+) -> bool {
+    let current_state = pc_state.get(&resource);
+    ic_cdk::println!("Current state of token {:?}: {:?}", resource, current_state);
+    match current_state {
+        Some(TransactionStatus::Prepared(prepared_tid)) => {
+            // Resource already in prepare state, reject further prepare statements.
+
+            if &tid == prepared_tid {
+                // This is a retry of the same transaction, so we can accept it
+                ic_cdk::println!(
+                    "Token already prepared for this transaction {} - accepting prepare statement",
+                    tid
+                );
+                true
+            } else {
+                // This is a different transaction, so we reject it
+                ic_cdk::println!("Token already prepared for another transaction {} - rejecting prepare statement for {}", prepared_tid, tid);
+                false
+            }
+        }
+        Some(TransactionStatus::Aborted) | Some(TransactionStatus::Comitted) | None => {
+            match balances.get(&resource) {
+                Some(resource_balance) => {
+                    // Check if given balance exists and if overflow would happen for the given change in balance
+                    match resource_balance.checked_add_signed(balance_change) {
+                        Some(_) => {
+                            // Resource not locked in 2PC
+                            pc_state.insert(resource, TransactionStatus::Prepared(tid));
+                            ic_cdk::println!("Token prepared - accepting prepare statement");
+                            true
+                        }
+
+                        None => {
+                            ic_cdk::println!(
+                                "Token balance overflow - rejecting prepare statement"
+                            );
+                            false
+                        }
+                    }
+                }
+                None => {
+                    ic_cdk::println!("Token does not exist - rejecting prepare statement");
+                    false
+                }
+            }
+        }
+    }
 }
 
 #[update]
@@ -52,58 +122,32 @@ fn init(token_names: Vec<TokenName>, token_balances: Vec<TokenBalance>) {
 /// Function is idempotent. If prepared is called multiple times for the same transaction, "true" will be returned.
 fn prepare_transaction(tid: TransactionId, resource: TokenName, balance_change: i64) -> bool {
     ic_cdk::println!("Preparing transaction: {} for resource {:?}", tid, resource);
-
-    let r = PC_STATE.with_borrow_mut(|pc_state| {
-        BALANCES.with_borrow_mut(|balances| {
-            let current_state = pc_state.get(&resource);
-            ic_cdk::println!("Current state of token {:?}: {:?}", resource, current_state);
-            match current_state {
-                Some(TransactionStatus::Prepared(prepared_tid)) => {
-                    // Resource already in prepare state, reject further prepare statements.
-
-                    if &tid == prepared_tid {
-                        // This is a retry of the same transaction, so we can accept it
-                        ic_cdk::println!("Token already prepared for this transaction {} - accepting prepare statement", tid);
-                        true
-                    } else {
-                        // This is a different transaction, so we reject it
-                        ic_cdk::println!("Token already prepared for another transaction {} - rejecting prepare statement for {}", prepared_tid, tid);
-                        false
-                    }
-                }
-                Some(TransactionStatus::Aborted) | Some(TransactionStatus::Comitted) | None => {
-                    match balances.get(&resource) {
-                        Some(resource_balance) => {
-                            // Check if given balance exists and if overflow would happen for the given change in balance
-                            match resource_balance.checked_add_signed(balance_change) {
-                                Some(_) => {
-                                    // Resource not locked in 2PC
-                                    pc_state.insert(resource, TransactionStatus::Prepared(tid));
-                                    ic_cdk::println!(
-                                        "Token prepared - accepting prepare statement"
-                                    );
-                                    true
-                                }
-
-                                None => {
-                                    ic_cdk::println!(
-                                        "Token balance overflow - rejecting prepare statement"
-                                    );
-                                    false
-                                }
-                            }
-                        }
-                        None => {
-                            ic_cdk::println!("Token does not exist - rejecting prepare statement");
-                            false
-                        }
-                    }
-                }
-            }
-        })
-    });
+    let r = with_state_mut(|s, b| _prepare_transaction(s, b, tid, resource, balance_change));
     print_state();
     r
+}
+
+fn _abort_transaction(
+    pc_state: &mut BTreeMap<TokenName, TransactionStatus>,
+    _balances: &mut BTreeMap<TokenName, TokenBalance>,
+    tid: TransactionId,
+    resource: TokenName,
+    _balance_change: i64,
+) {
+    if pc_state.get(&resource) == Some(&TransactionStatus::Prepared(tid)) {
+        pc_state.insert(resource.clone(), TransactionStatus::Aborted);
+        ic_cdk::println!(
+            "Transaction {} aborted: state was: {:?}",
+            tid,
+            pc_state.get(&resource)
+        );
+    } else {
+        ic_cdk::println!(
+            "Transaction {} not aborted: state is {:?}",
+            tid,
+            pc_state.get(&resource)
+        );
+    }
 }
 
 #[update]
@@ -117,62 +161,50 @@ fn prepare_transaction(tid: TransactionId, resource: TokenName, balance_change: 
 /// Has to be idempotent.
 fn abort_transaction(tid: TransactionId, resource: TokenName, _balance_change: i64) {
     ic_cdk::println!("Aborting transaction: {} for resource {:?}", tid, resource);
-    let r = PC_STATE.with_borrow_mut(|pc_state| {
-        if pc_state.get(&resource) == Some(&TransactionStatus::Prepared(tid)) {
-            pc_state.insert(resource.clone(), TransactionStatus::Aborted);
-            ic_cdk::println!(
-                "Transaction {} aborted: state was: {:?}",
-                tid,
-                pc_state.get(&resource)
-            );
-        } else {
-            ic_cdk::println!(
-                "Transaction {} not aborted: state is {:?}",
-                tid,
-                pc_state.get(&resource)
-            );
-        }
-    });
+    let r = with_state_mut(|s, b| _abort_transaction(s, b, tid, resource, _balance_change));
     print_state();
     r
+}
+
+/// XXX - This is currently not idempotent.
+fn _commit_transaction(
+    pc_state: &mut BTreeMap<TokenName, TransactionStatus>,
+    balances: &mut BTreeMap<TokenName, TokenBalance>,
+    tid: TransactionId,
+    resource: TokenName,
+    balance_change: i64,
+) {
+    assert_eq!(
+        pc_state.get(&resource),
+        Some(&TransactionStatus::Prepared(tid))
+    );
+    balances.insert(
+        resource.clone(),
+        balances
+            .get(&resource)
+            .expect("Token does not have a registered balance - prepare should have failed")
+            .checked_add_signed(balance_change)
+            .expect("Token balance overflow - prepare should have failed"),
+    );
+    pc_state.insert(resource, TransactionStatus::Comitted);
 }
 
 #[update]
 /// Commit changes according to previously prepared balance change and resource.
 ///
 /// If this fails, there is likely a bug in the protocol.
-///
-/// XXX - This is currently not idempotent.
 fn commit_transaction(tid: TransactionId, resource: TokenName, balance_change: i64) {
     ic_cdk::println!("Committing transaction: {} for token {:?}", tid, resource);
-    PC_STATE.with_borrow_mut(|pc_state| {
-        assert_eq!(
-            pc_state.get(&resource),
-            Some(&TransactionStatus::Prepared(tid))
-        );
-        BALANCES.with_borrow_mut(|balances| {
-            balances.insert(
-                resource.clone(),
-                balances
-                    .get(&resource)
-                    .expect("Token does not have a registered balance - prepare should have failed")
-                    .checked_add_signed(balance_change)
-                    .expect("Token balance overflow - prepare should have failed"),
-            );
-            pc_state.insert(resource, TransactionStatus::Comitted);
-        });
-    });
+    with_state_mut(|s, b| _commit_transaction(s, b, tid, resource, balance_change));
     print_state();
 }
 
 fn print_state() {
-    PC_STATE.with_borrow(|pc_state| {
+    ic_cdk::println!("Current state of ledger:");
+    with_state(|pc_state, balances| {
         for (token, status) in pc_state.iter() {
             ic_cdk::println!("Token state: {:?} {:?}", token, status);
         }
-    });
-
-    BALANCES.with_borrow(|balances| {
         for (token, balance) in balances.iter() {
             ic_cdk::println!("Token balance: {:?} {:?}", token, balance);
         }
