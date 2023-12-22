@@ -6,7 +6,7 @@ use ic_cdk::api::call::call_raw;
 use ic_cdk::api::management_canister::provisional::CanisterId;
 use ic_cdk_macros::{query, update};
 
-use std::cell::RefCell;
+use std::{cell::RefCell, time::Duration};
 
 mod atomic_transactions;
 mod utils;
@@ -63,6 +63,44 @@ async fn swap_tokens(
 
     ic_cdk::println!("Transaction {} initialized", tid);
     with_state(tid, atomic_transactions::get_transaction_state)
+}
+
+fn get_active_transactions() -> Vec<TransactionId> {
+    TRANSACTION_STATE.with(|state| {
+        let state = state.borrow();
+        state
+            .transactions
+            .iter()
+            .filter(|(_, state)| {
+                state.transaction_status != TransactionStatus::Committed
+                    && state.transaction_status != TransactionStatus::Aborted
+            })
+            .map(|(tid, _)| *tid)
+            .collect()
+    })
+}
+
+/// Transactions can also be driven by timers.
+async fn timer_loop() {
+    ic_cdk::println!("Timer loop");
+    let mut transactions_executed = 0;
+    for tid in get_active_transactions() {
+        transaction_loop(tid).await;
+        transactions_executed += 1;
+    }
+    if transactions_executed > 0 {
+        ic_cdk::println!(
+            "{}",
+            Style::new().fg(ansi_term::Color::Green).paint(format!(
+                "Timer loop - {} transactions triggered",
+                transactions_executed
+            ))
+        );
+    } else {
+        ic_cdk::println!("Timer loop - no transactions");
+    }
+    // XXX Optimization: Schedule timer not every 1 second, but based on the state of active transactions.
+    ic_cdk_timers::set_timer(Duration::from_secs(1), || ic_cdk::spawn(timer_loop()));
 }
 
 #[update]
@@ -231,6 +269,10 @@ async fn init() {
             canister_ids.extend(principals);
         });
     }
+
+    ic_cdk_timers::set_timer(Duration::from_secs(1), || {
+        ic_cdk::spawn(timer_loop());
+    });
 }
 
 fn get_canister_ids() -> Vec<CanisterId> {
