@@ -8,6 +8,10 @@ function error() {
 }
 
 dfx canister call dex init '()'
+dfx canister call dex disable_timer '()'
+
+# Make sure there are not outstanding timer invocations
+sleep 2
 
 dfx canister call dex swap_token1_to_token2 '()'
 dfx canister call dex transaction_loop '(0: nat64)'

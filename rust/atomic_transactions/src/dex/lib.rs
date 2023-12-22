@@ -15,10 +15,20 @@ use crate::atomic_transactions::{TransactionList, TransactionStatus};
 const TOKEN1: &str = "ICP";
 const TOKEN2: &str = "USD";
 
+#[derive(Default, Clone, Copy)]
+struct Configuration {
+    disable_timer: bool,
+}
+
 thread_local! {
     // A list of canister IDs for data partitions
     static CANISTER_IDS: RefCell<Vec<Principal>> = RefCell::new(vec![]);
     static TRANSACTION_STATE: RefCell<TransactionList> = RefCell::new(TransactionList::default());
+    static CONFIGURATION: RefCell<Configuration> = RefCell::new(Configuration::default());
+}
+
+fn get_configuration() -> Configuration {
+    CONFIGURATION.with(|configuration| configuration.borrow().clone())
 }
 
 #[update]
@@ -80,24 +90,35 @@ fn get_active_transactions() -> Vec<TransactionId> {
     })
 }
 
+#[update]
+/// Disable the timer loop.
+/// This is useful for testing.
+fn disable_timer() {
+    CONFIGURATION.with(|configuration| {
+        let mut configuration = configuration.borrow_mut();
+        configuration.disable_timer = true;
+    });
+}
+
 /// Transactions can also be driven by timers.
 async fn timer_loop() {
-    ic_cdk::println!("Timer loop");
-    let mut transactions_executed = 0;
-    for tid in get_active_transactions() {
-        transaction_loop(tid).await;
-        transactions_executed += 1;
-    }
-    if transactions_executed > 0 {
-        ic_cdk::println!(
-            "{}",
-            Style::new().fg(ansi_term::Color::Green).paint(format!(
-                "Timer loop - {} transactions triggered",
-                transactions_executed
-            ))
-        );
-    } else {
-        ic_cdk::println!("Timer loop - no transactions");
+    if !get_configuration().disable_timer {
+        let mut transactions_executed = 0;
+        for tid in get_active_transactions() {
+            transaction_loop(tid).await;
+            transactions_executed += 1;
+        }
+        if transactions_executed > 0 {
+            ic_cdk::println!(
+                "{}",
+                Style::new().fg(ansi_term::Color::Green).paint(format!(
+                    "Timer loop - {} transactions triggered",
+                    transactions_executed
+                ))
+            );
+        } else {
+            ic_cdk::println!("Timer loop - no transactions");
+        }
     }
     // XXX Optimization: Schedule timer not every 1 second, but based on the state of active transactions.
     ic_cdk_timers::set_timer(Duration::from_secs(1), || ic_cdk::spawn(timer_loop()));
@@ -269,6 +290,12 @@ async fn init() {
             canister_ids.extend(principals);
         });
     }
+
+    // Reset transactions
+    TRANSACTION_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        *state = TransactionList::default();
+    });
 
     ic_cdk_timers::set_timer(Duration::from_secs(1), || {
         ic_cdk::spawn(timer_loop());
