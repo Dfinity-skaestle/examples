@@ -3,6 +3,7 @@ use std::{cell::RefCell, collections::BTreeMap, time::Duration};
 use ansi_term::Style;
 use candid::{CandidType, Decode, Principal};
 use ic_cdk::api::call::call_raw;
+use ic_cdk_macros::{query, update};
 
 pub(crate) type CanisterId = Principal;
 pub(crate) type TransactionId = usize;
@@ -347,6 +348,7 @@ pub(crate) fn get_transaction_status(
     transaction_state.transaction_status
 }
 
+#[query]
 /// Get the current state of a transaction.
 pub fn get_transaction_state(tid: TransactionId) -> TransactionResult {
     with_transaction(tid, _get_transaction_result)
@@ -380,13 +382,20 @@ fn get_active_transactions() -> Vec<TransactionId> {
     })
 }
 
+#[update]
 pub fn disable_timer(disable: bool) {
     CONFIGURATION.with(|configuration| {
         configuration.borrow_mut().disable_timer = disable;
     });
 }
 
-/// Transactions can also be driven by timers.
+#[update]
+/// Resume executing a transaction.
+///
+/// Calling this function might change the state of the transaction.
+/// This can either be triggered peridocially by the user or by a timer.
+///
+/// Returns the state of the transaction.
 async fn timer_loop() {
     if !get_configuration().disable_timer {
         let mut transactions_executed = 0;
@@ -410,6 +419,7 @@ async fn timer_loop() {
     ic_cdk_timers::set_timer(Duration::from_secs(1), || ic_cdk::spawn(timer_loop()));
 }
 
+#[update]
 pub async fn transaction_loop(tid: TransactionId) -> TransactionResult {
     let initial_transaction_status = with_transaction(tid, get_transaction_status);
     ic_cdk::println!(
