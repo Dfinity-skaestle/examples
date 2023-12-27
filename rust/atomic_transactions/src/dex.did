@@ -14,7 +14,6 @@ type TransactionResult = record {
 service : {
     "init" : () -> ();
     "transaction_loop" : (nat64) -> (TransactionResult, );
-    "swap_token1_to_token2" : () -> (TransactionResult, );
     "swap_tokens" : (text, text, int64, int64) -> (TransactionResult, );
     "get_transaction_state": (nat64) -> (TransactionResult, );
     "disable_timer": (bool) -> ();

@@ -8,9 +8,6 @@ use std::cell::RefCell;
 mod atomic_transactions;
 mod utils;
 
-const TOKEN1: &str = "ICP";
-const TOKEN2: &str = "USD";
-
 thread_local! {
     // A list of canister IDs for data partitions
     static CANISTER_IDS: RefCell<Vec<Principal>> = RefCell::new(vec![]);
@@ -18,14 +15,6 @@ thread_local! {
 
 fn with_canisters<R>(f: impl FnOnce(&mut Vec<Principal>) -> R) -> R {
     CANISTER_IDS.with(|canister_ids| f(&mut canister_ids.borrow_mut()))
-}
-
-#[update]
-/// Initialize transaction that executes the token swap.
-///
-/// Executes a hypothetical token swap between two tokens, where 1337 units of token 1 are swapped for 42 tokens of token 2.
-async fn swap_token1_to_token2() -> TransactionResult {
-    swap_tokens(TOKEN1.to_string(), TOKEN2.to_string(), -1337, 42).await
 }
 
 #[update]

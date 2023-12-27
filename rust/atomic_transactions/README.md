@@ -12,7 +12,7 @@ dfx build dex
 gzip dex.wasm
 dfx canister install dex
 dfx canister call dex init '()'
-dfx canister call dex swap_token1_to_token2 '()'
+dfx canister call dex swap_tokens '("ICP", "USD", -1337, 47)'
 dfx canister call dex transaction_loop '(0)'
 ```
 

@@ -10,6 +10,6 @@ function error() {
 dfx canister call dex init '()'
 dfx canister call dex disable_timer '(true)'
 
-dfx canister call dex swap_token1_to_token2 '()'
-dfx canister call dex transaction_loop '(0: nat64)'
-dfx canister call dex transaction_loop '(0: nat64)' | grep "Committed" || error "Transaction 0 was not committed"
+dfx canister call dex swap_tokens '("ICP", "USD", -1337, 47)'
+dfx canister call dex transaction_loop '(0)'
+dfx canister call dex transaction_loop '(0)' | grep "Committed" || error "Transaction 0 was not committed"
