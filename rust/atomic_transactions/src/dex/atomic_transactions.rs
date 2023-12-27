@@ -8,6 +8,28 @@ use ic_cdk_macros::{query, update};
 pub(crate) type CanisterId = Principal;
 pub(crate) type TransactionId = usize;
 
+// The time in nanoseconds after which a transaction is aborted if the prepare phase has not finished.
+// This prevents malicious canisters from locking a transaction forever without
+// freeing resources.
+//
+// Malicious canisters can still consumes resources forever if the inifinitely delay the commit call.
+// That's because commits need to be retried forever. Not though, that other canisters involved in the 2PC can
+// unlock and continue their computation right after they have executed the commit, allowing them to
+// unlock all of their resources.
+//
+// This cannot be avoided easily, as the 2PC protocols dictacts that the commit has to happen if the
+// prepare phase was successful.
+//
+// One solution might be to roll back state, but that is complicated and it is hard to guarantee that
+// the roll back doesn't fail either.
+//
+// Generally, calling into a canister assumes some sort of trust for that canister.
+const ABORT_PREPARE_AFTER_NS: u64 = 10 * 1000 * 1000 * 1000;
+
+// The minimum time in nanoseconds between consecutive actions on the same transactions.
+// This is to prevent a transaction from being executed too often.
+const RATE_LIMIT_TIMEOUT_NS: u64 = 5 * 1000 * 1000 * 1000;
+
 #[derive(Default, Clone, Copy)]
 struct Configuration {
     disable_timer: bool,
@@ -100,6 +122,8 @@ pub(crate) struct TransactionState {
     pub(crate) pending_commit_calls: Vec<Call>,
     // The time this transaction was last retried.
     pub(crate) last_action_time: u64,
+    // The time at which the prepare phase has started.
+    pub(crate) prepare_start_time: u64,
 }
 
 impl TransactionState {
@@ -153,6 +177,7 @@ impl TransactionState {
             pending_abort_calls: abort_calls,
             pending_commit_calls: commit_calls,
             last_action_time: 0,
+            prepare_start_time: ic_cdk::api::time(),
         }
     }
 
@@ -397,6 +422,11 @@ pub fn disable_timer(disable: bool) {
 ///
 /// Returns the state of the transaction.
 async fn timer_loop() {
+    // The timer has to be set first!
+    // Otherwise, if a call triggered from the timer never returns, no more new timers will be scheduled.
+    // XXX Optimization: Schedule timer not every 1 second, but based on the state of active transactions.
+    ic_cdk_timers::set_timer(Duration::from_secs(1), || ic_cdk::spawn(timer_loop()));
+
     if !get_configuration().disable_timer {
         let mut transactions_executed = 0;
         for tid in get_active_transactions() {
@@ -415,8 +445,6 @@ async fn timer_loop() {
             ic_cdk::println!("Timer loop - no transactions");
         }
     }
-    // XXX Optimization: Schedule timer not every 1 second, but based on the state of active transactions.
-    ic_cdk_timers::set_timer(Duration::from_secs(1), || ic_cdk::spawn(timer_loop()));
 }
 
 #[update]
@@ -428,57 +456,74 @@ pub async fn transaction_loop(tid: TransactionId) -> TransactionResult {
         initial_transaction_status
     );
 
-    const TIMEOUT: u64 = 5 * 1000 * 1000 * 1000;
-    if ic_cdk::api::time() <= with_transaction(tid, |_, s| s.last_action_time) + TIMEOUT {
+    if ic_cdk::api::time()
+        <= with_transaction(tid, |_, s| s.last_action_time) + RATE_LIMIT_TIMEOUT_NS
+    {
         ic_cdk::println!("Rate limiting transaction {}", tid);
         return get_transaction_state(tid);
     }
 
     match initial_transaction_status {
         TransactionStatus::Preparing => {
-            let pending_prepare_calls =
-                with_transaction(tid, |_, f| f.pending_prepare_calls.clone());
-
-            // Trigger all calls that have not been triggered yet
-            for call in pending_prepare_calls {
-                // Nothing to do if we already have a successful call
-                if call.num_success > 0 {
-                    continue;
-                }
-
+            // Check if the prepare phase has timed out
+            let timeout =
+                with_transaction(tid, |_, s| s.prepare_start_time + ABORT_PREPARE_AFTER_NS);
+            if ic_cdk::api::time() > timeout {
                 ic_cdk::println!(
-                    "Calling {} with method {} and payload {:?}",
-                    call.target,
-                    call.method,
-                    call.payload
+                    "Aborting transaction {} because prepare phase timed out",
+                    tid
                 );
-
-                with_transaction_mut(tid, |_, s| s.last_action_time = ic_cdk::api::time());
-
-                with_transaction_mut(tid, |_, s| s.register_prepare_call(call.target.clone()));
-                let call_raw_result =
-                    call_raw(call.target, &call.method, call.payload.clone(), 0).await;
-
                 with_transaction_mut(tid, |_, s| {
-                    let style = if call_raw_result.is_ok() {
-                        Style::new().bold().fg(ansi_term::Color::Green)
-                    } else {
-                        Style::new().bold().fg(ansi_term::Color::Red)
-                    };
-                    ic_cdk::println!(
-                        "{}",
-                        style.paint(format!("Call result: {:?}", call_raw_result))
-                    );
-                    let succ = match call_raw_result {
-                        Ok(payload) => {
-                            let successful_prepare: bool = Decode!(&payload, bool).unwrap();
-                            ic_cdk::println!("Received prepare response: {}", successful_prepare);
-                            successful_prepare
-                        }
-                        Err(_) => false,
-                    };
-                    s.prepare_received(succ, call.target)
+                    s.transaction_status = TransactionStatus::Aborting
                 });
+            } else {
+                let pending_prepare_calls =
+                    with_transaction(tid, |_, f| f.pending_prepare_calls.clone());
+
+                // Trigger all calls that have not been triggered yet
+                for call in pending_prepare_calls {
+                    // Nothing to do if we already have a successful call
+                    if call.num_success > 0 {
+                        continue;
+                    }
+
+                    ic_cdk::println!(
+                        "Calling {} with method {} and payload {:?}",
+                        call.target,
+                        call.method,
+                        call.payload
+                    );
+
+                    with_transaction_mut(tid, |_, s| s.last_action_time = ic_cdk::api::time());
+
+                    with_transaction_mut(tid, |_, s| s.register_prepare_call(call.target.clone()));
+                    let call_raw_result =
+                        call_raw(call.target, &call.method, call.payload.clone(), 0).await;
+
+                    with_transaction_mut(tid, |_, s| {
+                        let style = if call_raw_result.is_ok() {
+                            Style::new().bold().fg(ansi_term::Color::Green)
+                        } else {
+                            Style::new().bold().fg(ansi_term::Color::Red)
+                        };
+                        ic_cdk::println!(
+                            "{}",
+                            style.paint(format!("Call result: {:?}", call_raw_result))
+                        );
+                        let succ = match call_raw_result {
+                            Ok(payload) => {
+                                let successful_prepare: bool = Decode!(&payload, bool).unwrap();
+                                ic_cdk::println!(
+                                    "Received prepare response: {}",
+                                    successful_prepare
+                                );
+                                successful_prepare
+                            }
+                            Err(_) => false,
+                        };
+                        s.prepare_received(succ, call.target)
+                    });
+                }
             }
         }
         TransactionStatus::Aborting => {

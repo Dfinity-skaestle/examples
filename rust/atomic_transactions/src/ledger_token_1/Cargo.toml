@@ -12,3 +12,5 @@ candid = "0.8.4"
 ic-cdk = "0.8.1"
 ic-cdk-macros = "0.6.10"
 ic-stable-structures = "0.5.4"
+ansi_term = "0.12"
+ic_atomic_transactions = { path = "../ic_atomic_transactions" }

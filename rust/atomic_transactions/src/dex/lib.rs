@@ -1,6 +1,7 @@
 use atomic_transactions::{TransactionResult, TransactionState};
 use candid::{Encode, Principal};
 
+use ic_atomic_transactions::Configuration;
 use ic_cdk_macros::update;
 
 use std::cell::RefCell;
@@ -68,4 +69,14 @@ async fn init() {
 
 fn has_canisters() -> bool {
     with_canisters(|canisters| canisters.len() > 0)
+}
+
+#[update]
+async fn set_configuration(configuration: Configuration) {
+    let canisters = with_canisters(|canisters| canisters.clone());
+
+    // Set configuration in first canister.
+    let _: () = ic_cdk::call(canisters[0], "set_configuration", (configuration,))
+        .await
+        .unwrap();
 }

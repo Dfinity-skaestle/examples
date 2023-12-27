@@ -1,8 +1,8 @@
 use candid::Principal;
 use ic_cdk::api::management_canister::{
     main::{
-        create_canister, install_code, CanisterInstallMode, CreateCanisterArgument,
-        InstallCodeArgument,
+        create_canister, install_code, update_settings, CanisterInstallMode,
+        CreateCanisterArgument, InstallCodeArgument, UpdateSettingsArgument,
     },
     provisional::CanisterSettings,
 };
@@ -26,6 +26,19 @@ pub(crate) async fn create_ledgers_from_wasm() -> Vec<Principal> {
     for i in 0..NUM_LEDGERS {
         let canister_record = create_canister(create_args.clone()).await.unwrap();
         let canister_id = canister_record.0.canister_id;
+
+        // Make the canister controller of itself
+        update_settings(UpdateSettingsArgument {
+            canister_id,
+            settings: CanisterSettings {
+                controllers: Some(vec![ic_cdk::id(), canister_id]),
+                compute_allocation: Some(0.into()),
+                memory_allocation: Some(0.into()),
+                freezing_threshold: Some(0.into()),
+            },
+        })
+        .await
+        .unwrap();
 
         ic_cdk::println!("Created canister {}", canister_id);
 
@@ -55,6 +68,8 @@ pub(crate) async fn create_ledgers_from_wasm() -> Vec<Principal> {
             .unwrap();
 
         canister_ids.push(canister_id);
+
+        // Adding the canister itself as a controller.
     }
 
     canister_ids

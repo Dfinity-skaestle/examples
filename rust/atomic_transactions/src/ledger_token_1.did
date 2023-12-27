@@ -3,4 +3,6 @@ service : {
     "prepare_transaction" : (nat, nat, nat) -> (bool);
     "abort_transaction" : (nat, nat) -> ();
     "commit_transaction" : (nat, nat, nat) -> ();
+    "set_configuration": (bool, bool) -> ();
+    "call_forever": (nat) -> ();
 };

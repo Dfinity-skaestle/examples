@@ -7,6 +7,9 @@ type TokenBalance = u64;
 mod atomic_transactions;
 use crate::atomic_transactions::TokenName;
 
+use ansi_term::Style;
+use ic_atomic_transactions::Configuration;
+
 thread_local! {
     /// Balances of tokens stored in this ledger
     ///
@@ -19,6 +22,8 @@ thread_local! {
     /// atomic transaction library.
     static BALANCES: RefCell<BTreeMap<TokenName, TokenBalance>> = RefCell::new(
         BTreeMap::new());
+    static CONFIGURATION: RefCell<Configuration> = RefCell::new(
+        Configuration::default());
 }
 
 pub(crate) fn with_balances_mut<R>(
@@ -27,15 +32,34 @@ pub(crate) fn with_balances_mut<R>(
     BALANCES.with_borrow_mut(|balances| f(balances))
 }
 
-pub(crate) fn with_balances<R>(f: impl FnOnce(&BTreeMap<TokenName, TokenBalance>) -> R) -> R {
-    BALANCES.with_borrow(|balances| f(balances))
+pub(crate) fn with_balances<R>(
+    f: impl FnOnce(&BTreeMap<TokenName, TokenBalance>, &Configuration) -> R,
+) -> R {
+    BALANCES.with_borrow(|balances| {
+        CONFIGURATION.with_borrow(|configuration| f(balances, configuration))
+    })
+}
+
+fn get_configuration() -> Configuration {
+    CONFIGURATION.with_borrow(|configuration| configuration.clone())
+}
+
+#[update]
+fn set_configuration(configuration: Configuration) {
+    ic_cdk::println!(
+        "Setting configuration: infinite_prepare = {:?}",
+        configuration
+    );
+    CONFIGURATION.with_borrow_mut(|c| {
+        *c = configuration;
+    })
 }
 
 /// Method to check if the prepare statement can be accepted.
 pub fn prepare_balance(resource: &TokenName, balance_change: i64) -> bool {
     // Note: Immutable access to balances here. No modifications to the
     // state are allowed here. Changes are safe to do only from the commit_balance function.
-    with_balances(|balances| {
+    with_balances(|balances, _configuration| {
         match balances.get(resource) {
             Some(resource_balance) => {
                 // Requested token does exist in ledger.
@@ -79,6 +103,27 @@ pub fn commit_balance(resource: &TokenName, balance_change: i64) {
 }
 
 #[update]
+async fn call_forever(depth: u64) {
+    if depth > 50 {
+        ic_cdk::println!("Reached maximum recursion depth. Stopping.");
+        return;
+    }
+
+    // Execute some work in the loop to ensure the loop isn't running too quickly.
+    // Aim for roughly 1B cycles (half of what is allowed).
+    // With that, we should at maximum have two calls per round.
+    let perf_count_start = ic_cdk::api::call::performance_counter(0);
+    let mut _sum = 0;
+    while ic_cdk::api::call::performance_counter(0) - perf_count_start < 1 * 1000 * 1000 * 1000 {
+        _sum += 1;
+    }
+
+    let _: () = ic_cdk::api::call::call(ic_cdk::id(), "call_forever", (depth + 1,))
+        .await
+        .unwrap();
+}
+
+#[update]
 /// Prepare atomic transactions by means of Two-Phase Commit
 ///
 /// This code ensures that resource exists and that the change in balance does not create overflows.
@@ -86,16 +131,59 @@ pub fn commit_balance(resource: &TokenName, balance_change: i64) {
 /// If this is okay, response "yes", otherwise "no".
 ///
 /// Function is idempotent. If prepared is called multiple times for the same transaction, "true" will be returned.
-fn prepare_transaction(tid: TransactionId, resource: TokenName, balance_change: i64) -> bool {
-    ic_cdk::println!("Preparing transaction: {} for resource {:?}", tid, resource);
-    let r = crate::atomic_transactions::prepare_transaction(
-        tid,
-        resource,
-        balance_change,
-        prepare_balance,
-    );
-    print_state();
-    r
+async fn prepare_transaction(tid: TransactionId, resource: TokenName, balance_change: i64) -> bool {
+    // In case of malicious behavior, we call into an infinite loop here.
+    let configuration = get_configuration();
+    if configuration.stop_on_prepare {
+        // Add a super long delay
+        let c = ic_cdk::api::management_canister::main::CanisterIdRecord {
+            canister_id: ic_cdk::id(),
+        };
+        let call_result = ic_cdk::api::management_canister::main::stop_canister(c).await;
+        ic_cdk::println!(
+            "{}",
+            Style::new().fg(ansi_term::Color::Red).paint(format!(
+                "Canister stop has returned - this is a bug: {:?}",
+                call_result
+            ))
+        );
+        call_result.unwrap();
+        false
+    } else if configuration.infinite_prepare {
+        // Call into an infinite loop
+        ic_cdk::println!(
+            "{}",
+            Style::new()
+                .fg(ansi_term::Color::Blue)
+                .paint(format!("Starting a call with long delay!"))
+        );
+        call_forever(0).await;
+        // Will never return
+        ic_cdk::println!(
+            "{}",
+            Style::new()
+                .fg(ansi_term::Color::Blue)
+                .paint(format!("Long delayed call has returned"))
+        );
+        let r = crate::atomic_transactions::prepare_transaction(
+            tid,
+            resource,
+            balance_change,
+            prepare_balance,
+        );
+        print_state();
+        r
+    } else {
+        ic_cdk::println!("Preparing transaction: {} for resource {:?}", tid, resource);
+        let r = crate::atomic_transactions::prepare_transaction(
+            tid,
+            resource,
+            balance_change,
+            prepare_balance,
+        );
+        print_state();
+        r
+    }
 }
 
 #[update]

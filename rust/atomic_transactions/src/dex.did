@@ -11,10 +11,16 @@ type TransactionResult = record {
     "state": TransactionStatus;
 };
 
+type Configuration = record {
+    "infinite_prepare": bool;
+    "stop_on_prepare": bool;
+}
+
 service : {
     "init" : () -> ();
     "transaction_loop" : (nat64) -> (TransactionResult, );
     "swap_tokens" : (text, text, int64, int64) -> (TransactionResult, );
     "get_transaction_state": (nat64) -> (TransactionResult, );
     "disable_timer": (bool) -> ();
+    "set_configuration": (Configuration,) -> ();
 };
