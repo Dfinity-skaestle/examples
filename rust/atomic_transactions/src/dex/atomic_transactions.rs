@@ -1,9 +1,16 @@
-use std::collections::BTreeMap;
+use std::{cell::RefCell, collections::BTreeMap, time::Duration};
 
-use candid::{CandidType, Principal};
+use ansi_term::Style;
+use candid::{CandidType, Decode, Principal};
+use ic_cdk::api::call::call_raw;
 
 pub(crate) type CanisterId = Principal;
 pub(crate) type TransactionId = usize;
+
+#[derive(Default, Clone, Copy)]
+struct Configuration {
+    disable_timer: bool,
+}
 
 #[derive(CandidType, Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum TransactionStatus {
@@ -14,6 +21,42 @@ pub(crate) enum TransactionStatus {
     // Final states
     Committed,
     Aborted,
+}
+
+thread_local! {
+    // A list of canister IDs for data partitions
+    static TRANSACTION_STATE: RefCell<TransactionList> = RefCell::new(TransactionList::default());
+    static CONFIGURATION: RefCell<Configuration> = RefCell::new(Configuration::default());
+}
+
+/// A helper method to mutate the state.
+pub(crate) fn with_state_mut<R>(f: impl FnOnce(&mut TransactionList) -> R) -> R {
+    TRANSACTION_STATE.with(|cell| f(&mut cell.borrow_mut()))
+}
+
+/// A helper method to access the state.
+pub(crate) fn with_state<R>(f: impl FnOnce(&TransactionList) -> R) -> R {
+    TRANSACTION_STATE.with(|cell| f(&cell.borrow()))
+}
+
+/// A helper method to mutate the state.
+pub(crate) fn with_transaction_mut<R>(
+    tid: TransactionId,
+    f: impl FnOnce(TransactionId, &mut TransactionState) -> R,
+) -> R {
+    TRANSACTION_STATE.with(|cell| f(tid, cell.borrow_mut().transactions.get_mut(&tid).unwrap()))
+}
+
+/// A helper method to access the state.
+pub(crate) fn with_transaction<R>(
+    tid: TransactionId,
+    f: impl FnOnce(TransactionId, &TransactionState) -> R,
+) -> R {
+    TRANSACTION_STATE.with(|cell| f(tid, cell.borrow().transactions.get(&tid).unwrap()))
+}
+
+fn get_configuration() -> Configuration {
+    CONFIGURATION.with(|configuration| configuration.borrow().clone())
 }
 
 pub(crate) struct TransactionList {
@@ -35,6 +78,15 @@ impl TransactionList {
         let transaction_number = self.next_transaction_number;
         self.next_transaction_number += 1;
         transaction_number
+    }
+
+    pub(crate) fn add_transaction(
+        &mut self,
+        transaction_state: TransactionState,
+        transaction_number: usize,
+    ) {
+        self.transactions
+            .insert(transaction_number, transaction_state);
     }
 }
 
@@ -278,7 +330,7 @@ impl Call {
     }
 }
 
-pub(crate) fn get_transaction_state(
+fn _get_transaction_result(
     tid: TransactionId,
     transaction_state: &TransactionState,
 ) -> TransactionResult {
@@ -293,4 +345,219 @@ pub(crate) fn get_transaction_status(
     transaction_state: &TransactionState,
 ) -> TransactionStatus {
     transaction_state.transaction_status
+}
+
+/// Get the current state of a transaction.
+pub fn get_transaction_state(tid: TransactionId) -> TransactionResult {
+    with_transaction(tid, _get_transaction_result)
+}
+
+pub fn get_next_transaction_number() -> TransactionId {
+    TRANSACTION_STATE.with(|cell| cell.borrow_mut().get_next_transaction_number())
+}
+
+pub fn add_transaction(
+    transaction_state: TransactionState,
+    transaction_number: usize,
+) -> TransactionResult {
+    with_state_mut(|state| {
+        state.add_transaction(transaction_state, transaction_number);
+    });
+    get_transaction_state(transaction_number)
+}
+
+fn get_active_transactions() -> Vec<TransactionId> {
+    with_state(|state| {
+        state
+            .transactions
+            .iter()
+            .filter(|(_, state)| {
+                state.transaction_status != TransactionStatus::Committed
+                    && state.transaction_status != TransactionStatus::Aborted
+            })
+            .map(|(tid, _)| *tid)
+            .collect()
+    })
+}
+
+pub fn disable_timer(disable: bool) {
+    CONFIGURATION.with(|configuration| {
+        configuration.borrow_mut().disable_timer = disable;
+    });
+}
+
+/// Transactions can also be driven by timers.
+async fn timer_loop() {
+    if !get_configuration().disable_timer {
+        let mut transactions_executed = 0;
+        for tid in get_active_transactions() {
+            transaction_loop(tid).await;
+            transactions_executed += 1;
+        }
+        if transactions_executed > 0 {
+            ic_cdk::println!(
+                "{}",
+                Style::new().fg(ansi_term::Color::Green).paint(format!(
+                    "Timer loop - {} transactions triggered",
+                    transactions_executed
+                ))
+            );
+        } else {
+            ic_cdk::println!("Timer loop - no transactions");
+        }
+    }
+    // XXX Optimization: Schedule timer not every 1 second, but based on the state of active transactions.
+    ic_cdk_timers::set_timer(Duration::from_secs(1), || ic_cdk::spawn(timer_loop()));
+}
+
+pub async fn transaction_loop(tid: TransactionId) -> TransactionResult {
+    let initial_transaction_status = with_transaction(tid, get_transaction_status);
+    ic_cdk::println!(
+        "Executing transaction {} with status {:?}",
+        tid,
+        initial_transaction_status
+    );
+
+    const TIMEOUT: u64 = 5 * 1000 * 1000 * 1000;
+    if ic_cdk::api::time() <= with_transaction(tid, |_, s| s.last_action_time) + TIMEOUT {
+        ic_cdk::println!("Rate limiting transaction {}", tid);
+        return get_transaction_state(tid);
+    }
+
+    match initial_transaction_status {
+        TransactionStatus::Preparing => {
+            let pending_prepare_calls =
+                with_transaction(tid, |_, f| f.pending_prepare_calls.clone());
+
+            // Trigger all calls that have not been triggered yet
+            for call in pending_prepare_calls {
+                // Nothing to do if we already have a successful call
+                if call.num_success > 0 {
+                    continue;
+                }
+
+                ic_cdk::println!(
+                    "Calling {} with method {} and payload {:?}",
+                    call.target,
+                    call.method,
+                    call.payload
+                );
+
+                with_transaction_mut(tid, |_, s| s.last_action_time = ic_cdk::api::time());
+
+                with_transaction_mut(tid, |_, s| s.register_prepare_call(call.target.clone()));
+                let call_raw_result =
+                    call_raw(call.target, &call.method, call.payload.clone(), 0).await;
+
+                with_transaction_mut(tid, |_, s| {
+                    let style = if call_raw_result.is_ok() {
+                        Style::new().bold().fg(ansi_term::Color::Green)
+                    } else {
+                        Style::new().bold().fg(ansi_term::Color::Red)
+                    };
+                    ic_cdk::println!(
+                        "{}",
+                        style.paint(format!("Call result: {:?}", call_raw_result))
+                    );
+                    let succ = match call_raw_result {
+                        Ok(payload) => {
+                            let successful_prepare: bool = Decode!(&payload, bool).unwrap();
+                            ic_cdk::println!("Received prepare response: {}", successful_prepare);
+                            successful_prepare
+                        }
+                        Err(_) => false,
+                    };
+                    s.prepare_received(succ, call.target)
+                });
+            }
+        }
+        TransactionStatus::Aborting => {
+            let pending_abort_calls = with_transaction(tid, |_, f| f.pending_abort_calls.clone());
+
+            // Trigger all calls that have not been triggered yet
+            for call in pending_abort_calls {
+                // Nothing to do if we already have a successful call
+                if call.num_success > 0 {
+                    continue;
+                }
+
+                ic_cdk::println!(
+                    "Calling {} with method {} and payload {:?}",
+                    call.target,
+                    call.method,
+                    call.payload
+                );
+
+                with_transaction_mut(tid, |_, s| s.last_action_time = ic_cdk::api::time());
+
+                with_transaction_mut(tid, |_, s| s.register_abort_call(call.target.clone()));
+                let call_raw_result =
+                    call_raw(call.target, &call.method, call.payload.clone(), 0).await;
+
+                with_transaction_mut(tid, |_, s| {
+                    s.abort_received(call_raw_result.is_ok(), call.target)
+                });
+            }
+        }
+        TransactionStatus::Committing => {
+            let pending_commit_calls =
+                with_transaction_mut(tid, |_, f| f.pending_commit_calls.clone());
+
+            // Trigger all calls that have not been triggered yet
+            for call in pending_commit_calls {
+                // Nothing to do if we already have a successful call
+                if call.num_success > 0 {
+                    continue;
+                }
+
+                ic_cdk::println!(
+                    "Calling {} with method {} and payload {:?}",
+                    call.target,
+                    call.method,
+                    call.payload
+                );
+
+                with_transaction_mut(tid, |_, s| s.last_action_time = ic_cdk::api::time());
+
+                with_transaction_mut(tid, |_, s| s.register_commit_call(call.target.clone()));
+                let call_raw_result =
+                    call_raw(call.target, &call.method, call.payload.clone(), 0).await;
+
+                with_transaction_mut(tid, |_, s| {
+                    s.commit_received(call_raw_result.is_ok(), call.target)
+                });
+            }
+        }
+        // We are already in a final state, no need to do anything
+        TransactionStatus::Committed => {}
+        TransactionStatus::Aborted => {}
+    }
+
+    let new_transaction_status = with_transaction(tid, |_, state| {
+        ic_cdk::println!("Transaction {} state is: {:?}", tid, state);
+        state.transaction_status
+    });
+
+    if new_transaction_status != initial_transaction_status {
+        let o = format!(
+            "Transaction {} state changed from {:?} to {:?}",
+            tid, initial_transaction_status, new_transaction_status
+        );
+        ic_cdk::println!("{}", Style::new().fg(ansi_term::Color::Yellow).paint(o));
+        // Reset last action time, so that the next action on this transaction can be executed immediately.
+        with_transaction_mut(tid, |_, s| s.last_action_time = 0);
+    }
+
+    get_transaction_state(tid)
+}
+
+pub fn init() {
+    // Reset transactions
+    with_state_mut(|state| {
+        *state = TransactionList::default();
+    });
+
+    ic_cdk_timers::set_timer(Duration::from_secs(1), || {
+        ic_cdk::spawn(timer_loop());
+    });
 }
