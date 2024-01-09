@@ -4,6 +4,7 @@ use candid::Principal;
 
 // A token is always a 3-character string
 pub type TokenName = String;
+// XXX The transaction ID has to contain the sender principal ID, so that it is unique
 pub type TransactionId = usize;
 
 thread_local! {
@@ -31,6 +32,7 @@ pub struct TransactionState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransactionStatus {
     Prepared(TransactionId),
+    // Need to maintain lists of aborted and committed transactions
     Aborted,
     Comitted,
 }

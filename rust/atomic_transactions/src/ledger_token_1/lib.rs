@@ -103,7 +103,7 @@ pub fn commit_balance(resource: &TokenName, balance_change: i64) {
 }
 
 #[update]
-async fn call_forever(depth: u64) {
+async fn deep_call_tree(depth: u64) {
     if depth > 50 {
         ic_cdk::println!("Reached maximum recursion depth. Stopping.");
         return;
@@ -157,7 +157,7 @@ async fn prepare_transaction(tid: TransactionId, resource: TokenName, balance_ch
                 .fg(ansi_term::Color::Blue)
                 .paint(format!("Starting a call with long delay!"))
         );
-        call_forever(0).await;
+        deep_call_tree(0).await;
         // Will never return
         ic_cdk::println!(
             "{}",
